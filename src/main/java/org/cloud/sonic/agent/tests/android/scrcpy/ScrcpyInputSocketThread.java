@@ -90,13 +90,33 @@ public class ScrcpyInputSocketThread extends Thread {
     @Override
     public void run() {
         int scrcpyPort = PortTool.getPort();
-        AndroidDeviceBridgeTool.forward(iDevice, scrcpyPort, "scrcpy");
+        AndroidDeviceBridgeTool.forward(iDevice, scrcpyPort, ScrcpyLocalThread.SCRCPY_SOCKET_NAME);
         Socket videoSocket = new Socket();
         InputStream inputStream = null;
         try {
             videoSocket.connect(new InetSocketAddress("localhost", scrcpyPort));
             inputStream = videoSocket.getInputStream();
             if (videoSocket.isConnected()) {
+                // 共 13 字节需要跳过，后面才是真正的 H264 裸流
+                byte[] header = new byte[13];
+                int totalRead = 0;
+                while (totalRead < 13) {
+                    int n = inputStream.read(header, totalRead, 13 - totalRead);
+                    if (n == -1) {
+                        log.info("scrcpy socket closed unexpectedly while reading header (read {} bytes)", totalRead);
+                        return;
+                    }
+                    totalRead += n;
+                }
+                int codecId = ((header[1] & 0xFF) << 24) | ((header[2] & 0xFF) << 16)
+                        | ((header[3] & 0xFF) << 8) | (header[4] & 0xFF);
+                int initWidth = ((header[5] & 0xFF) << 24) | ((header[6] & 0xFF) << 16)
+                        | ((header[7] & 0xFF) << 8) | (header[8] & 0xFF);
+                int initHeight = ((header[9] & 0xFF) << 24) | ((header[10] & 0xFF) << 16)
+                        | ((header[11] & 0xFF) << 8) | (header[12] & 0xFF);
+//                log.info("scrcpy header: dummyByte={}, codecId=0x{}, size={}x{}",
+//                        header[0] & 0xFF, Integer.toHexString(codecId), initWidth, initHeight);
+
                 String sizeTotal = AndroidDeviceBridgeTool.getScreenSize(iDevice);
                 JSONObject size = new JSONObject();
                 size.put("msg", "size");
@@ -153,7 +173,7 @@ public class ScrcpyInputSocketThread extends Thread {
                 }
             }
         }
-        AndroidDeviceBridgeTool.removeForward(iDevice, scrcpyPort, "scrcpy");
+        AndroidDeviceBridgeTool.removeForward(iDevice, scrcpyPort, ScrcpyLocalThread.SCRCPY_SOCKET_NAME);
         if (session != null) {
             ScreenMap.getMap().remove(session);
         }
